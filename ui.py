@@ -518,19 +518,21 @@ class EMGRobotWindow(QWidget):
         try:
             client_img = getattr(self.robot.client, 'image', None)
             if client_img is not None and len(client_img) > 0:
-                frame     = client_img.copy()
-                rgb       = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w      = rgb.shape[:2]
-                q_img     = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
-                pixmap    = QPixmap.fromImage(q_img)
-                scaled    = pixmap.scaled(
+                frame  = client_img.copy()
+                rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w   = rgb.shape[:2]
+                rgb_bytes = bytes(rgb)                              # ← ADD THIS (keeps buffer alive)
+                q_img  = QImage(rgb_bytes, w, h, 3 * w, QImage.Format_RGB888)
+                pixmap = QPixmap.fromImage(q_img)
+                scaled = pixmap.scaled(
                     self.camera_label.size(),
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation,
                 )
                 self.camera_label.setPixmap(scaled)
+                self.robot.client.video_flag = True                 # ← ADD THIS (unblocks video thread)
         except Exception:
-            pass   # silently skip bad frames
+            pass
 
     # ── Mini EMG plots (view 3 only) ───────────────────────
     def _draw_mini_plot(self):

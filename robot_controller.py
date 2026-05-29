@@ -65,7 +65,8 @@ class RobotDog:
             print("Connected!")
             self.is_running = True
 
-            # Start video-receiving thread so camera feed is available
+            # ── Video thread ─────────────────────────────────
+            self.client.video_flag = True                          # ← ADD THIS (initialise flag)
             self._video_thread = threading.Thread(
                 target=self.client.receiving_video,
                 args=(self.IP,),
