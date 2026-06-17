@@ -117,7 +117,7 @@ def generate_signals(pressed, sliders):
     """
     Simulate 3-channel EMG from keyboard state.
     pressed : list[bool]   — [F, L, R] key state
-    sliders : list[int]    — slider values 0–100 per muscle
+    sliders : list[int]    — slider values 0-100 per muscle
     Returns list of 3 numpy arrays of length CHUNK.
     """
     base  = lfilter([1], [1, -0.9], np.random.normal(0, 1.0, CHUNK))
@@ -142,4 +142,4 @@ def process_chunk(x, zi):
     filt      = lfilter(bp_b, bp_a, x)
     rect      = np.abs(filt)
     env, zi   = lfilter(lp_b, lp_a, rect, zi=zi)
-    return env, x, zi
+    return env, filt, zi
