@@ -12,6 +12,7 @@ Changes vs. original:
 """
 
 import time
+import threading
 import numpy as np
 
 try:
@@ -24,10 +25,12 @@ from PyQt5.QtCore    import Qt, QTimer
 from PyQt5.QtGui     import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QSlider, QFrame, QStackedWidget,
+    QSlider, QFrame, QStackedWidget, QScrollArea,   
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
+from frontalis_daq import FrontalisDAQ, _DAQ_AVAILABLE
 
 from config import (
     FS, WINDOW_SEC, WINDOW_SAMPLES, CHUNK,
@@ -36,6 +39,7 @@ from config import (
     POWER_CONTRACTIONS,
     DANCE_BILATERAL_CONTRACTIONS, DANCE_FRONTALIS_CONTRACTIONS,
     BUZZER_BILATERAL_CONTRACTIONS,
+    DAQ_AO_CHANNEL, DAQ_AI_CHANNEL, DAQ_V_MIN, DAQ_V_MAX,
     lp_a, ROBOT_IP,
 )
 from emg_core         import MuscleCalib, generate_signals, process_chunk
@@ -197,6 +201,11 @@ class EMGRobotWindow(QWidget):
         self.robot           = RobotDog(ip_address=ROBOT_IP)
         self.robot_connected = False
 
+        # ── DAQ state ───────────────────────────────────────────
+        self._daq              = None    # FrontalisDAQ instance when active
+        self.use_daq           = False   # True while DAQ is running
+        self._daq_connect_result = [None]  # used by async connect poll
+
         # ── Build UI ────────────────────────────────────────
         self._build_ui()
 
@@ -216,7 +225,9 @@ class EMGRobotWindow(QWidget):
         main.setSpacing(10)
 
         # ── Left control panel ─────────────────────────────
-        left = QVBoxLayout()
+        left_container = QWidget()
+        left_container.setStyleSheet("background-color: #1a1a2e;")
+        left = QVBoxLayout(left_container)
         left.setSpacing(6)
 
         title = QLabel("EMG → ROBOT DOG")
@@ -252,6 +263,41 @@ class EMGRobotWindow(QWidget):
             panel = CalibPanel(self.calibs[i])
             left.addWidget(panel)
             self._calib_panels.append(panel)
+
+            if i == 0:
+                daq_sep = QFrame()
+                daq_sep.setFrameShape(QFrame.HLine)
+                daq_sep.setStyleSheet("color: #2a2a3a;")
+                left.addWidget(daq_sep)
+
+                daq_row = QHBoxLayout()
+
+                self._daq_btn = QPushButton("🔌 Utilizar DAQ")
+                self._daq_btn.setCheckable(True)
+                self._daq_btn.setEnabled(_DAQ_AVAILABLE)
+                self._daq_btn.setToolTip(
+                    "Output simulated frontalis via AO and read it back via AI")
+                self._daq_btn.setStyleSheet(
+                    "QPushButton { background: #1a2a3a; color: #4fc3f7; "
+                    "border: 1px solid #2e5080; border-radius: 4px; "
+                    "padding: 5px 8px; font-size: 11px; font-weight: bold; }"
+                    "QPushButton:checked { background: #0d3a5c; color: #7dd4f8; "
+                    "border-color: #4fc3f7; }"
+                    "QPushButton:hover:!checked { background: #223344; }"
+                    "QPushButton:disabled { color: #333; border-color: #333; }")
+                self._daq_btn.clicked.connect(self._toggle_daq)
+                daq_row.addWidget(self._daq_btn)
+
+                self._daq_status = QLabel(
+                    "● Off" if _DAQ_AVAILABLE else "NI-DAQmx not found")
+                self._daq_status.setStyleSheet("color: #555; font-size: 10px;")
+                daq_row.addWidget(self._daq_status)
+                left.addLayout(daq_row)
+
+                daq_sep2 = QFrame()
+                daq_sep2.setFrameShape(QFrame.HLine)
+                daq_sep2.setStyleSheet("color: #2a2a3a;")
+                left.addWidget(daq_sep2)
 
         # View-switch button
         self.switch_btn = QPushButton("Switch Muscle View →")
@@ -295,6 +341,66 @@ class EMGRobotWindow(QWidget):
             "color: #4fc3f7; font-size: 12px; padding: 4px;")
         left.addWidget(self.cmd_lbl)
 
+        # ── Record / Replay ───────────────────────────────────
+        rec_sep = QFrame()
+        rec_sep.setFrameShape(QFrame.HLine)
+        rec_sep.setStyleSheet("color: #444;")
+        left.addWidget(rec_sep)
+
+        rec_title = QLabel("⏺  Record / Replay")
+        rec_title.setStyleSheet(
+            "font-size: 12px; font-weight: bold; color: #ffd93d;")
+        left.addWidget(rec_title)
+
+        btn_row = QHBoxLayout()
+
+        self._rec_btn = QPushButton("⏺  Record")
+        self._rec_btn.setCheckable(True)
+        self._rec_btn.setStyleSheet(
+            "QPushButton { background: #3a1a1a; color: #ff6b6b; "
+            "border: 1px solid #8b2222; border-radius: 4px; "
+            "padding: 6px; font-weight: bold; }"
+            "QPushButton:checked { background: #8b0000; color: white; "
+            "border-color: #ff4444; }"
+            "QPushButton:hover { background: #4a2222; }")
+        self._rec_btn.clicked.connect(self._toggle_record)
+        btn_row.addWidget(self._rec_btn)
+
+        self._replay_btn = QPushButton("▶  Replay")
+        self._replay_btn.setCheckable(True)
+        self._replay_btn.setEnabled(False)
+        self._replay_btn.setStyleSheet(
+            "QPushButton { background: #1a3a1a; color: #51cf66; "
+            "border: 1px solid #2e6b2e; border-radius: 4px; "
+            "padding: 6px; font-weight: bold; }"
+            "QPushButton:checked { background: #006600; color: white; "
+            "border-color: #51cf66; }"
+            "QPushButton:disabled { background: #1a1a1a; color: #333; "
+            "border-color: #333; }"
+            "QPushButton:hover:!disabled { background: #2a4a2a; }")
+        self._replay_btn.clicked.connect(self._toggle_replay)
+        btn_row.addWidget(self._replay_btn)
+
+        left.addLayout(btn_row)
+
+
+        self._clear_btn = QPushButton("🗑  Clear")
+        self._clear_btn.setEnabled(False)
+        self._clear_btn.setStyleSheet(
+            "QPushButton { background: #2a2a1a; color: #aaa; "
+            "border: 1px solid #555; border-radius: 4px; "
+            "padding: 6px; font-weight: bold; }"
+            "QPushButton:disabled { background: #1a1a1a; color: #333; "
+            "border-color: #333; }"
+            "QPushButton:hover:!disabled { background: #3a3a1a; color: #ffcc02; "
+            "border-color: #888; }")
+        self._clear_btn.clicked.connect(self._clear_recording)
+        btn_row.addWidget(self._clear_btn)
+
+        self._rec_status = QLabel("No recording")
+        self._rec_status.setStyleSheet("color: #555; font-size: 10px;")
+        left.addWidget(self._rec_status)
+
         # Updated legend for new gesture mapping
         legend = QLabel(
             "EMG Control Mapping:\n"
@@ -311,7 +417,18 @@ class EMGRobotWindow(QWidget):
         left.addWidget(legend)
         left.addStretch()
 
-        main.addLayout(left, 1)
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left_container)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setFixedWidth(400)
+        left_scroll.setStyleSheet("""
+            QScrollArea { border: none; background-color: #1a1a2e; }
+            QScrollBar:vertical { background: #1e1e2e; width: 6px; border-radius: 3px; }
+            QScrollBar::handle:vertical { background: #444; border-radius: 3px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+        main.addWidget(left_scroll, 1)
 
         # ── Right: stacked widget ──────────────────────────
         self.right_stack = QStackedWidget()
@@ -405,12 +522,16 @@ class EMGRobotWindow(QWidget):
         for i, k in enumerate(keys):
             if event.key() == k:
                 self.pressed[i] = True
+                if i == 0 and self.use_daq and self._daq:   # ← ADD
+                    self._daq.set_active(True)
 
     def keyReleaseEvent(self, event):
         keys = [Qt.Key_F, Qt.Key_L, Qt.Key_R]
         for i, k in enumerate(keys):
             if event.key() == k:
                 self.pressed[i] = False
+                if i == 0 and self.use_daq and self._daq:   # ← ADD
+                    self._daq.set_active(False)
 
     # ── View switching (0–2 = per-muscle plot; 3 = camera) ─
     def _switch_view(self):
@@ -441,11 +562,171 @@ class EMGRobotWindow(QWidget):
             self.robot_status_lbl.setText("● Disconnected")
             self.robot_status_lbl.setStyleSheet(
                 "color: #ff6b6b; font-weight: bold;")
+            self.camera_label.setPixmap(QPixmap())
+            self.camera_label.setText("Camera — connect robot to enable")
+
+    def _toggle_daq(self):
+        if self._daq_btn.isChecked():
+            # ── Enable ────────────────────────────────────────────────
+            self._daq_btn.setEnabled(False)
+            self._daq_status.setText("Connecting...")
+            self._daq_status.setStyleSheet("color: #ffcc02; font-size: 10px;")
+
+            self._daq = FrontalisDAQ(
+                ao_channel = DAQ_AO_CHANNEL,
+                ai_channel = DAQ_AI_CHANNEL,
+                v_min      = DAQ_V_MIN,
+                v_max      = DAQ_V_MAX,
+            )
+            self._daq_connect_result = [None]
+
+            def _do_start():
+                self._daq_connect_result[0] = self._daq.start()
+
+            threading.Thread(target=_do_start, daemon=True).start()
+
+            # Poll until start() returns (up to 10 s)
+            self._daq_poll = QTimer()
+            self._daq_poll.timeout.connect(self._check_daq_connected)
+            self._daq_poll.start(200)
+
+        else:
+            # ── Disable ───────────────────────────────────────────────
+            self._stop_daq()
+
+    def _check_daq_connected(self):
+        """Poll timer callback — fires until start() completes."""
+        if self._daq_connect_result[0] is None:
+            return   # still connecting in worker thread
+
+        self._daq_poll.stop()
+        self._daq_btn.setEnabled(True)
+
+        if self._daq_connect_result[0]:
+            self.use_daq = True
+            self._daq_status.setText("● Active — AO + AI running")
+            self._daq_status.setStyleSheet("color: #51cf66; font-size: 10px;")
+        else:
+            err = self._daq.error_msg[:48] if self._daq else "unknown"
+            self._daq_btn.setChecked(False)
+            self._daq_status.setText(f"● Error: {err}")
+            self._daq_status.setStyleSheet("color: #ff6b6b; font-size: 10px;")
+            self._daq = None
+
+    def _stop_daq(self):
+        """Cleanly stop DAQ and reset UI."""
+        if self._daq:
+            self._daq.stop()
+            self._daq = None
+        self.use_daq = False
+        self._daq_btn.setChecked(False)
+        self._daq_status.setText("● Off")
+        self._daq_status.setStyleSheet("color: #555; font-size: 10px;")
+
+    def _handle_daq_disconnect(self):
+        """Called when DAQ signals a hardware error mid-session."""
+        self._stop_daq()
+        self._daq_status.setText("● Disconnected (hardware error)")
+        self._daq_status.setStyleSheet("color: #ff6b6b; font-size: 10px;")
+    # ── Record / Replay controls ───────────────────────────
+    def _toggle_record(self):
+        if not self.robot_connected:
+            self._rec_btn.setChecked(False)
+            self._rec_status.setText("Connect robot first")
+            self._rec_status.setStyleSheet("color: #ff6b6b; font-size: 10px;")
+            return
+
+        if self._rec_btn.isChecked():
+            # ── Start recording ────────────────────────────
+            self.robot.start_recording()
+            self._rec_btn.setText("⏹  Stop Recording")
+            self._replay_btn.setEnabled(False)
+            self._rec_status.setText("● Recording...")
+            self._rec_status.setStyleSheet("color: #ff6b6b; font-size: 10px;")
+        else:
+            # ── Stop recording ─────────────────────────────
+            self.robot.stop_recording()
+            self._rec_btn.setText("⏺  Record")
+            n = len(self.robot._record_log)
+            if n > 0:
+                self._replay_btn.setEnabled(True)
+                self._clear_btn.setEnabled(True)          
+                self._rec_status.setText(f"Saved — {n} commands")
+                self._rec_status.setStyleSheet("color: #51cf66; font-size: 10px;")
+            else:
+                self._rec_status.setText("Nothing recorded")
+                self._rec_status.setStyleSheet("color: #888; font-size: 10px;")
+
+    def _toggle_replay(self):
+        if not self.robot_connected or not self.robot._record_log:
+            self._replay_btn.setChecked(False)
+            return
+
+        if self._replay_btn.isChecked():
+            # ── Start replay ───────────────────────────────
+            self.robot.start_replay()
+            self._replay_btn.setText("⏹  Stop Replay")
+            self._rec_btn.setEnabled(False)          # block recording during replay
+            self._rec_status.setText("▶ Replaying...")
+            self._rec_status.setStyleSheet("color: #4fc3f7; font-size: 10px;")
+
+            # Poll every 200 ms to detect when replay finishes naturally
+            self._replay_poll = QTimer()
+            self._replay_poll.timeout.connect(self._check_replay_done)
+            self._replay_poll.start(200)
+        else:
+            # ── Abort replay ───────────────────────────────
+            self.robot.stop_replay()
+            self._finish_replay_ui()
+
+    def _check_replay_done(self):
+        """Called by poll timer — cleans up UI when replay thread finishes."""
+        if not self.robot.replaying:
+            self._replay_poll.stop()
+            self._finish_replay_ui()
+
+    def _finish_replay_ui(self):
+        self._replay_btn.setChecked(False)
+        self._replay_btn.setText("▶  Replay")
+        self._rec_btn.setEnabled(True)
+        n = len(self.robot._record_log)
+        self._clear_btn.setEnabled(n > 0)
+        self._rec_status.setText(f"Ready — {n} commands")
+        self._rec_status.setStyleSheet("color: #51cf66; font-size: 10px;")
+
+    def _clear_recording(self):
+        """Discard the current recording and reset to clean state."""
+        if self.robot.replaying:
+            self.robot.stop_replay()
+        self.robot._record_log   = []
+        self.robot._record_start = None
+
+        self._replay_btn.setEnabled(False)
+        self._replay_btn.setChecked(False)
+        self._replay_btn.setText("▶  Replay")
+        self._clear_btn.setEnabled(False)
+        self._rec_btn.setEnabled(True)
+        self._rec_btn.setChecked(False)
+        self._rec_btn.setText("⏺  Record")
+        self._rec_status.setText("No recording")
+        self._rec_status.setStyleSheet("color: #555; font-size: 10px;")
 
     # ── Main update loop (50 ms timer) ─────────────────────
     def _update(self):
         t_now     = time.time()
-        raws      = generate_signals(self.pressed, [s.value() for s in self.sliders])
+        raws = generate_signals(self.pressed, [s.value() for s in self.sliders])
+
+        # When DAQ is active, replace channel 0 (frontalis) with the real
+        # AI-acquired signal.  Masseters (1, 2) always use keyboard simulation.
+        if self.use_daq and self._daq is not None:
+            if not self._daq.connected:
+                self._handle_daq_disconnect()
+            else:
+                daq_chunk = self._daq.read_chunk()
+                if daq_chunk is not None:
+                    # Slider 50 → ×1.0 (unity), 0 → silence, 100 → ×2.0
+                    gain    = self.sliders[0].value() / 50.0
+                    raws[0] = daq_chunk * gain
         norm_vals = []
 
         for i in range(3):
@@ -490,7 +771,7 @@ class EMGRobotWindow(QWidget):
             panel.update_contraction_display(
                 self.calibs[i].count_contractions(t_now), 10)
 
-        # ── EMG → robot (updated signature) ───────────────
+        # ── EMG → robot (Chamada ORIGINAL sem alterações) ──
         self._prev_frontalis_count, self._last_special_cmd_time = emg_to_robot(
             self.robot, self.calibs, norm_vals,
             bilateral_count, self._bilateral_contraction_times,
@@ -498,6 +779,21 @@ class EMGRobotWindow(QWidget):
             self._prev_frontalis_count, self._last_special_cmd_time,
             self.cmd_lbl,
         )
+
+        # ── RESOLUÇÃO DO PROBLEMA 2: LIMPAR BUFFERS DE ANIMAÇÃO SE DESCONECTADO ──
+        if not self.robot_connected:
+            # Limpamos apenas os buffers dos masseteres e eventos bilaterais (Buzzer e Dança)
+            self._bilateral_contraction_times.clear()
+            self.calibs[1].contraction_times.clear() # Left Masseter
+            self.calibs[2].contraction_times.clear() # Right Masseter
+            
+            # NOTA: Não limpamos o self.calibs[0] (Frontalis) aqui, para permitir 
+            # que os 3 clenches acumulem e disparem o Power Toggle para ligar!
+
+        # ── RESOLUÇÃO DO PROBLEMA 1: TOGGLE REAL (LIGAR / DESLIGAR) ──
+        if self.robot.emg_power_toggle:
+            self.robot.emg_power_toggle = False # Consome a flag imediatamente
+            self._toggle_robot() # Liga ou desliga conforme o estado atual
 
         # ── Render ─────────────────────────────────────────
         if self.muscle_view == 3:
@@ -678,6 +974,8 @@ class EMGRobotWindow(QWidget):
     def closeEvent(self, event):
         self.timer.stop()
         self.cam_timer.stop()
+        if self.use_daq and self._daq:   # ← ADD
+            self._daq.stop()
         if self.robot_connected:
             self.robot.disconnect()
         event.accept()

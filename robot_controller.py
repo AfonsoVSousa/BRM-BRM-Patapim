@@ -55,6 +55,12 @@ class RobotDog:
         self.is_dancing    = False
         self._buzzer_active = False   # True while 2-s beep is running
 
+        # ── Recording / Replay ────────────────────────────────────
+        self.recording     = False   # True enquanto está a gravar
+        self._record_log   = []      # lista de (tempo_relativo_s, comando_str)
+        self._record_start = None    # timestamp de início da gravação
+        self.replaying     = False   # True enquanto o replay está a correr
+
     # ── Connection ─────────────────────────────────────────
     def connect(self):
         print("Connecting to robot...")
@@ -85,9 +91,10 @@ class RobotDog:
             return False
 
     def disconnect(self):
+        self._set_led(0)
+        time.sleep(0.5)
         self.is_running = False
         self._stop_movement()
-        self._set_led(0)
         self.client.tcp_flag = False
         self.client.turn_off_client()
         print("Robot disconnected.")
@@ -104,6 +111,9 @@ class RobotDog:
                 # ── Priority 1: dance ──────────────────────
                 if self.emg_dance_trigger:
                     self.emg_dance_trigger = False
+                    if self.recording and self._record_start is not None:   
+                        rel_t = time.time() - self._record_start            
+                        self._record_log.append((rel_t, "__DANCE__"))
                     threading.Thread(target=self._dance, daemon=True).start()
                     time.sleep(0.05)
                     continue
@@ -115,6 +125,9 @@ class RobotDog:
                 # ── Priority 2: buzzer ─────────────────────
                 if self.emg_buzzer_trigger:
                     self.emg_buzzer_trigger = False
+                    if self.recording and self._record_start is not None:   # ← ADD
+                        rel_t = time.time() - self._record_start            # ← ADD
+                        self._record_log.append((rel_t, "__BUZZER__"))
                     threading.Thread(target=self._buzzer_alert, daemon=True).start()
                     time.sleep(0.05)
                     continue
@@ -130,8 +143,9 @@ class RobotDog:
                     time.sleep(0.6)
                     continue
 
-                # ── Priority 4: movement ───────────────────
-                if robot_active:
+                # ── Priority 4: movement ───────────────────────────────
+                # Skip normal EMG control while replaying a recording
+                if robot_active and not self.replaying:
                     frontalis_active = (
                         self.emg_frontalis_intensity > self.frontalis_threshold
                     )
@@ -139,39 +153,33 @@ class RobotDog:
                     turn_left  = self.emg_masseter_diff < -self.masseter_threshold
 
                     if frontalis_active:
-                        # Speed proportional to frontalis intensity (range 2–10)
                         raw_spd = 2 + (self.emg_frontalis_intensity / 100.0) * 8
                         spd = str(int(max(2, min(10, raw_spd))))
                         self.client.move_speed = spd
 
                         if turn_right:
-                            self.client.send_data(
-                                cmd.CMD_TURN_RIGHT + "#" + spd + '\n')
+                            self._send_movement(cmd.CMD_TURN_RIGHT + "#" + spd + '\n')
                         elif turn_left:
-                            self.client.send_data(
-                                cmd.CMD_TURN_LEFT + "#" + spd + '\n')
+                            self._send_movement(cmd.CMD_TURN_LEFT  + "#" + spd + '\n')
                         else:
-                            self.client.send_data(
-                                cmd.CMD_MOVE_FORWARD + "#" + spd + '\n')
+                            self._send_movement(cmd.CMD_MOVE_FORWARD + "#" + spd + '\n')
 
                         self.last_valid_command_time = now
 
                     elif turn_right:
-                        # Frontalis off but right masseter dominant → turn in place
-                        self.client.send_data(cmd.CMD_TURN_RIGHT + "#4\n")
+                        self._send_movement(cmd.CMD_TURN_RIGHT + "#4\n")
                         self.last_valid_command_time = now
 
                     elif turn_left:
-                        # Frontalis off but left masseter dominant → turn in place
-                        self.client.send_data(cmd.CMD_TURN_LEFT + "#4\n")
+                        self._send_movement(cmd.CMD_TURN_LEFT + "#4\n")
                         self.last_valid_command_time = now
 
                     else:
-                        self._stop_movement()
+                        spd = self.client.move_speed or "5"
+                        self._send_movement(cmd.CMD_MOVE_STOP + "#" + spd + '\n')
 
-                    # Safety stop on communication timeout
                     if (now - self.last_valid_command_time) > self.timeout_duration:
-                        self._stop_movement()
+                        self._stop_movement()   # safety — not recorded intentionally
 
                 time.sleep(0.05)
 
@@ -182,6 +190,13 @@ class RobotDog:
     def _stop_movement(self):
         spd = self.client.move_speed or "5"
         self.client.send_data(cmd.CMD_MOVE_STOP + "#" + spd + '\n')
+
+    def _send_movement(self, command_str):
+        """Send a movement command and log it if recording is active."""
+        self.client.send_data(command_str)
+        if self.recording and self._record_start is not None:
+            rel_t = time.time() - self._record_start   # tempo relativo ao início
+            self._record_log.append((rel_t, command_str))
 
     def _set_led(self, mode):
         self.client.send_data(cmd.CMD_LED_MOD + '#' + str(mode) + '\n')
@@ -264,7 +279,65 @@ class RobotDog:
             self._set_led(1)
             self.is_dancing = False
             print("[DANCE] Done!")
+        
+        # ── Recording controls ─────────────────────────────────
+    def start_recording(self):
+        """Clear log and start recording movement commands."""
+        self._record_log   = []
+        self._record_start = time.time()
+        self.recording     = True
+        print("[REC] Recording started")
 
+    def stop_recording(self):
+        self.recording = False
+        duration = time.time() - self._record_start if self._record_start else 0
+        n_total  = len(self._record_log)
+        n_dance  = sum(1 for _, c in self._record_log if c == "__DANCE__")
+        n_buzzer = sum(1 for _, c in self._record_log if c == "__BUZZER__")
+        n_moves  = sum(1 for _, c in self._record_log
+                       if "STOP" not in c and not c.startswith("__"))
+        n_stop   = n_total - n_moves - n_dance - n_buzzer
+        print(f"[REC] {n_total} commands — {n_moves} move, {n_stop} stop, "
+              f"{n_dance} dance, {n_buzzer} buzzer — {duration:.1f}s")
+
+    # ── Replay controls ────────────────────────────────────
+    def start_replay(self):
+        """Replay the recorded command log in a background thread."""
+        if not self._record_log or self.replaying or self.is_dancing:
+            return
+        self.replaying = True
+        threading.Thread(target=self._replay_loop, daemon=True).start()
+
+    def stop_replay(self):
+        """Abort an ongoing replay."""
+        self.replaying = False
+        self._stop_movement()
+
+    def _replay_loop(self):
+        print(f"[REPLAY] Replaying {len(self._record_log)} commands...")
+        start = time.time()
+        for rel_t, command_str in self._record_log:
+            if not self.replaying:
+                break
+            wait = (start + rel_t) - time.time()
+            if wait > 0:
+                time.sleep(wait)
+
+            if command_str == "__DANCE__":
+                if not self.is_dancing:
+                    threading.Thread(target=self._dance, daemon=True).start()
+                print(f"  t={rel_t:.2f}s  [DANCE]")
+            elif command_str == "__BUZZER__":
+                threading.Thread(target=self._buzzer_alert, daemon=True).start()
+                print(f"  t={rel_t:.2f}s  [BUZZER]")
+            else:
+                self.client.send_data(command_str)
+                if "STOP" not in command_str:
+                    print(f"  t={rel_t:.2f}s  {command_str.strip()}")
+
+        self._stop_movement()
+        self.replaying = False
+        print("[REPLAY] Done")
 
 # ============================================================
 # EMG → ROBOT COMMAND MAPPING

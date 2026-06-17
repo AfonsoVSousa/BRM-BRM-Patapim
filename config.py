@@ -49,3 +49,11 @@ def _lowpass(cutoff, fs, order=2):
 
 bp_b, bp_a = _bandpass(LOWCUT, HIGHCUT, FS)
 lp_b, lp_a = _lowpass(ENVELOPE_CUTOFF, FS)
+
+# ── DAQ Channels ───────────────────────────────────────────────────────
+# Verify device name in NI MAX before running (may be Dev1, Dev2, etc.)
+DAQ_AO_CHANNEL  = b"Dev1/ao0"   # AO output — frontalis signal generator
+DAQ_AI_CHANNEL  = b"Dev1/ai1"   # AI input  — signal after analog chain
+DAQ_V_MIN       = -1.0           # V — must cover INA126 output swing
+DAQ_V_MAX       =  1.0           # V
+DAQ_AMPLITUDE   = 0.0008            # V — AO peak amplitude when F is held

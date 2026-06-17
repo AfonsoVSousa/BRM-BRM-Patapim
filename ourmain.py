@@ -4,6 +4,9 @@ main.py — Entry point for EMG → Robot Dog Controller.
 Run: python main.py
 """
 
+import ctypes
+ctypes.cdll.LoadLibrary(r"C:\Windows\System32\nicaiu.dll")
+
 import sys
 from PyQt5.QtWidgets import QApplication
 from ui import EMGRobotWindow
