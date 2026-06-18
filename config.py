@@ -3,17 +3,19 @@
 config.py — All constants and filter coefficients for EMG → Robot Dog.
 """
 
-from scipy.signal import butter
+from scipy.signal import butter, iirnotch
 
 # ── EMG Acquisition ────────────────────────────────────────
 FS             = 2000
 WINDOW_SEC     = 5
 WINDOW_SAMPLES = FS * WINDOW_SEC
-CHUNK          = 100
+CHUNK          = 100    # 50 ms
 
 # ── Filter Parameters ──────────────────────────────────────
 LOWCUT          = 20
 HIGHCUT         = 450
+NOTCH_FREQ      = 50
+NOTCH_Q         = 30
 ENVELOPE_CUTOFF = 2
 
 # ── Muscles ────────────────────────────────────────────────
@@ -43,11 +45,15 @@ def _bandpass(lowcut, highcut, fs, order=4):
     nyq = fs / 2
     return butter(order, [lowcut / nyq, highcut / nyq], btype='band')
 
+def _notch(freq, fs, q=30):
+    return iirnotch(freq, q, fs)
+
 def _lowpass(cutoff, fs, order=2):
     nyq = fs / 2
     return butter(order, cutoff / nyq, btype='low')
 
 bp_b, bp_a = _bandpass(LOWCUT, HIGHCUT, FS)
+notch_b, notch_a = _notch(NOTCH_FREQ, FS, NOTCH_Q)
 lp_b, lp_a = _lowpass(ENVELOPE_CUTOFF, FS)
 
 # ── DAQ Channels ───────────────────────────────────────────────────────

@@ -4,11 +4,10 @@ emg_core.py — MuscleCalib class + signal generation + processing.
 No Qt dependency — pure numpy/scipy.
 """
 
-import time
 import numpy as np
 from scipy.signal import lfilter
 
-from config import bp_b, bp_a, lp_b, lp_a, CHUNK
+from config import bp_b, bp_a, notch_b, notch_a, lp_b, lp_a, CHUNK
 
 
 # ============================================================
@@ -134,12 +133,13 @@ def generate_signals(pressed, sliders):
 # SIGNAL PROCESSING
 # ============================================================
 
-def process_chunk(x, zi):
+def process_chunk(raw, bp_zi, notch_zi, env_zi):
     """
-    Bandpass filter → full-wave rectify → envelope (low-pass).
-    Returns (envelope, raw_filtered, new_zi).
+    Bandpass filter → 50 Hz notch → full-wave rectify → envelope (low-pass).
+    Returns (envelope, raw_filtered, new_bp_zi, new_notch_zi, new_env_zi).
     """
-    filt      = lfilter(bp_b, bp_a, x)
-    rect      = np.abs(filt)
-    env, zi   = lfilter(lp_b, lp_a, rect, zi=zi)
-    return env, filt, zi
+    filt, bp_zi    = lfilter(bp_b, bp_a, raw, zi=bp_zi)
+    filt, notch_zi = lfilter(notch_b, notch_a, filt, zi=notch_zi)
+    rect           = np.abs(filt)
+    env, env_zi    = lfilter(lp_b, lp_a, rect, zi=env_zi)
+    return env, filt, bp_zi, notch_zi, env_zi
