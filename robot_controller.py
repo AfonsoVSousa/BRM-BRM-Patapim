@@ -1,14 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-robot_controller.py — RobotDog class and EMG → command mapping.
-
-Changes vs. original:
-  • Turning is now independent of frontalis (robot can turn even when stopped).
-  • New emg_buzzer_trigger flag: activates buzzer for 2 s.
-  • Video-receiving thread started on connect() so camera feed is available.
-  • emg_to_robot() updated: new bilateral gesture parameters, always writes
-    emg_masseter_diff regardless of frontalis state, English command labels.
-"""
+# ============================================================
+# FILE: robot_controller.py
+#
+# RobotDog wrapper and EMG-to-command mapping. Handles network
+# connection, movement commands, recording, replay, and trigger
+# handling for special gestures.
+# ============================================================
 
 import time
 import threading
@@ -56,10 +52,10 @@ class RobotDog:
         self._buzzer_active = False   # True while 2-s beep is running
 
         # ── Recording / Replay ────────────────────────────────────
-        self.recording     = False   # True enquanto está a gravar
-        self._record_log   = []      # lista de (tempo_relativo_s, comando_str)
-        self._record_start = None    # timestamp de início da gravação
-        self.replaying     = False   # True enquanto o replay está a correr
+        self.recording     = False   # True while recording commands
+        self._record_log   = []      # List of (relative_time_s, command_str)
+        self._record_start = None    # Timestamp when recording started
+        self.replaying     = False   # True while replay is running
 
     # ── Connection ─────────────────────────────────────────
     def connect(self):
@@ -72,7 +68,7 @@ class RobotDog:
             self.is_running = True
 
             # ── Video thread ─────────────────────────────────
-            self.client.video_flag = True                          # ← ADD THIS (initialise flag)
+            self.client.video_flag = True                          # Initialize flag
             self._video_thread = threading.Thread(
                 target=self.client.receiving_video,
                 args=(self.IP,),
@@ -125,8 +121,8 @@ class RobotDog:
                 # ── Priority 2: buzzer ─────────────────────
                 if self.emg_buzzer_trigger:
                     self.emg_buzzer_trigger = False
-                    if self.recording and self._record_start is not None:   # ← ADD
-                        rel_t = time.time() - self._record_start            # ← ADD
+                    if self.recording and self._record_start is not None:
+                        rel_t = time.time() - self._record_start            # Relative time
                         self._record_log.append((rel_t, "__BUZZER__"))
                     threading.Thread(target=self._buzzer_alert, daemon=True).start()
                     time.sleep(0.05)
@@ -195,7 +191,7 @@ class RobotDog:
         """Send a movement command and log it if recording is active."""
         self.client.send_data(command_str)
         if self.recording and self._record_start is not None:
-            rel_t = time.time() - self._record_start   # tempo relativo ao início
+            rel_t = time.time() - self._record_start   # Relative time from recording start
             self._record_log.append((rel_t, command_str))
 
     def _set_led(self, mode):

@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-emg_core.py — MuscleCalib class + signal generation + processing.
-No Qt dependency — pure numpy/scipy.
-"""
+# ============================================================
+# FILE: emg_core.py
+#
+# Core EMG utilities for calibration, synthetic signal
+# generation, and chunk-based filtering / normalization.
+# ============================================================
 
 import numpy as np
 from scipy.signal import lfilter

@@ -1,4 +1,10 @@
-# -*- coding: utf-8 -*-
+# ============================================================
+# FILE: frontalis_daq.py
+#
+# NI-DAQmx helper for the frontalis signal path. Sets up AO/AI
+# tasks, streams samples in the background, and buffers input.
+# ============================================================
+
 import ctypes
 import threading
 import numpy as np
@@ -155,7 +161,7 @@ class FrontalisDAQ:
     # ── Setup ──────────────────────────────────────────────────────────
 
     def _setup_tasks(self):
-        print("[DAQ] _setup_tasks iniciado")
+        print("[DAQ] _setup_tasks started")
 
         # ── AO ────────────────────────────────────────────────────────
         self._ao_task = ctypes.c_void_p(0)

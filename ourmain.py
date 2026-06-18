@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-main.py — Entry point for EMG → Robot Dog Controller.
-Run: python main.py
-"""
+# ============================================================
+# FILE: ourmain.py
+#
+# Launches the EMG Robot Dog GUI and loads the Qt application
+# entry point for the desktop control workflow.
+# ============================================================
 
 import ctypes
 ctypes.cdll.LoadLibrary(r"C:\Windows\System32\nicaiu.dll")

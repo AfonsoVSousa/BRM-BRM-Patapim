@@ -1,15 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-ui.py — CalibPanel widget + EMGRobotWindow main window.
-
-Changes vs. original:
-  • View 3 (Camera + EMG): 4 normalised plots on the left, live camera on the
-    right, and an action-status box below the camera.
-  • Bilateral masseter contraction tracking feeds the new gesture logic.
-  • emg_to_robot() now receives bilateral state and returns independently of
-    whether frontalis is active (turning is decoupled from forward movement).
-  • Legend updated to reflect new gesture mapping.
-"""
+# ============================================================
+# FILE: ui.py
+#
+# Main PyQt interface for EMG visualization, calibration, DAQ
+# toggles, camera display, and runtime robot control orchestration.
+# ============================================================
 
 import time
 import threading
@@ -775,7 +769,7 @@ class EMGRobotWindow(QWidget):
             panel.update_contraction_display(
                 self.calibs[i].count_contractions(t_now), 10)
 
-        # ── EMG → robot (Chamada ORIGINAL sem alterações) ──
+        # ── EMG -> robot (original call, unchanged) ──
         self._prev_frontalis_count, self._last_special_cmd_time = emg_to_robot(
             self.robot, self.calibs, norm_vals,
             bilateral_count, self._bilateral_contraction_times,
@@ -784,20 +778,20 @@ class EMGRobotWindow(QWidget):
             self.cmd_lbl,
         )
 
-        # ── RESOLUÇÃO DO PROBLEMA 2: LIMPAR BUFFERS DE ANIMAÇÃO SE DESCONECTADO ──
+        # ── Problem 2 fix: clear animation buffers when disconnected ──
         if not self.robot_connected:
-            # Limpamos apenas os buffers dos masseteres e eventos bilaterais (Buzzer e Dança)
+            # Clear only the masseter buffers and bilateral events (buzzer and dance)
             self._bilateral_contraction_times.clear()
-            self.calibs[1].contraction_times.clear() # Left Masseter
-            self.calibs[2].contraction_times.clear() # Right Masseter
+            self.calibs[1].contraction_times.clear()  # Left Masseter
+            self.calibs[2].contraction_times.clear()  # Right Masseter
             
-            # NOTA: Não limpamos o self.calibs[0] (Frontalis) aqui, para permitir 
-            # que os 3 clenches acumulem e disparem o Power Toggle para ligar!
+            # Note: keep self.calibs[0] (Frontalis) intact so three clenches
+            # can accumulate and trigger the power toggle to turn the robot on.
 
-        # ── RESOLUÇÃO DO PROBLEMA 1: TOGGLE REAL (LIGAR / DESLIGAR) ──
+        # ── Problem 1 fix: real power toggle (on / off) ──
         if self.robot.emg_power_toggle:
-            self.robot.emg_power_toggle = False # Consome a flag imediatamente
-            self._toggle_robot() # Liga ou desliga conforme o estado atual
+            self.robot.emg_power_toggle = False  # Consume the flag immediately
+            self._toggle_robot()  # Turn the robot on or off based on current state
 
         # ── Render ─────────────────────────────────────────
         if self.muscle_view == 3:

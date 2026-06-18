@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-config.py — All constants and filter coefficients for EMG → Robot Dog.
-"""
+# ============================================================
+# FILE: config.py
+#
+# Central configuration for EMG sampling, filtering, thresholds,
+# robot connection settings, and DAQ hardware parameters.
+# ============================================================
 
 from scipy.signal import butter
 
