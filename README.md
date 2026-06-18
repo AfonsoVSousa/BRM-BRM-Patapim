@@ -11,8 +11,22 @@ This project adds an EMG-based control layer on top of the manufacturer's origin
 | Name | Contact |
 | --- | --- |
 | Afonso Sousa | up202207498@up.pt |
+| André Pereira | up202206403@up.pt |
 | Maria Matos | up202208005@up.pt |
 | Sara Gouveia | up202206979@up.pt |
+
+## Project Structure
+
+```text
+BRM-BRM-Patapim/
+├── ourmain.py           # Entry point that launches the PyQt GUI
+├── ui.py                # Main interface, plots, calibration, DAQ, robot orchestration and runtime control
+├── emg_core.py          # EMG signal generation, filtering, normalization, and calibration logic
+├── config.py            # Shared constants, thresholds, filter coefficients, and hardware settings
+├── robot_controller.py  # Freenove robot client wrapper and EMG → command mapping
+├── frontalis_daq.py     # NI-DAQmx frontalis output/input loop for hardware signal injection
+└── README.md            # Project overview and usage notes
+```
 
 ## Instructions
 
@@ -39,3 +53,7 @@ This project adds an EMG-based control layer on top of the manufacturer's origin
    ```bash
    python ourmain.py
    ```
+
+## Configuration
+
+Before using the code, update the robot IP address and the NI-DAQmx device/channel names in `config.py` so they match your setup. It is also worth checking the remaining values in that file, such as the sampling rate, filter cutoffs, thresholds, and DAQ voltage limits, to make sure they are appropriate for your application and hardware.
