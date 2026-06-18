@@ -7,7 +7,16 @@ No Qt dependency — pure numpy/scipy.
 import numpy as np
 from scipy.signal import lfilter
 
-from config import bp_b, bp_a, notch_b, notch_a, lp_b, lp_a, CHUNK
+from config import (
+    ADAPTIVE_LMS_MU,
+    CHUNK,
+    FS,
+    NOTCH_FREQ,
+    bp_b,
+    bp_a,
+    lp_b,
+    lp_a,
+)
 
 
 # ============================================================
@@ -108,6 +117,36 @@ class MuscleCalib:
                 f"LO {self.thresh_lo:.3f} | HI {self.thresh_hi:.3f}")
 
 
+class Adaptive50HzCanceller:
+    """Two-tap LMS canceller for a narrow 50 Hz interference line."""
+
+    def __init__(self, fs=FS, freq=NOTCH_FREQ, mu=ADAPTIVE_LMS_MU):
+        self.fs = fs
+        self.freq = freq
+        self.mu = mu
+        self.phase = 0.0
+        self.weights = np.zeros(2, dtype=np.float64)
+
+    def process(self, samples):
+        omega = 2.0 * np.pi * self.freq / self.fs
+        output = np.empty_like(samples, dtype=np.float64)
+
+        for index, sample in enumerate(samples):
+            ref = np.array([
+                np.sin(self.phase),
+                np.cos(self.phase),
+            ], dtype=np.float64)
+            estimate = float(np.dot(self.weights, ref))
+            error = float(sample - estimate)
+            self.weights += self.mu * error * ref
+            output[index] = error
+            self.phase += omega
+            if self.phase >= 2.0 * np.pi:
+                self.phase -= 2.0 * np.pi
+
+        return output
+
+
 # ============================================================
 # SIGNAL GENERATION (keyboard simulation)
 # ============================================================
@@ -133,13 +172,13 @@ def generate_signals(pressed, sliders):
 # SIGNAL PROCESSING
 # ============================================================
 
-def process_chunk(raw, bp_zi, notch_zi, env_zi):
+def process_chunk(raw, bp_zi, notch_state, env_zi):
     """
-    Bandpass filter → 50 Hz notch → full-wave rectify → envelope (low-pass).
-    Returns (envelope, raw_filtered, new_bp_zi, new_notch_zi, new_env_zi).
+    Bandpass filter → adaptive 50 Hz canceller → full-wave rectify → envelope.
+    Returns (envelope, raw_filtered, new_bp_zi, notch_state, new_env_zi).
     """
-    filt, bp_zi    = lfilter(bp_b, bp_a, raw, zi=bp_zi)
-    filt, notch_zi = lfilter(notch_b, notch_a, filt, zi=notch_zi)
-    rect           = np.abs(filt)
-    env, env_zi    = lfilter(lp_b, lp_a, rect, zi=env_zi)
-    return env, filt, bp_zi, notch_zi, env_zi
+    filt, bp_zi = lfilter(bp_b, bp_a, raw, zi=bp_zi)
+    filt = notch_state.process(filt)
+    rect = np.abs(filt)
+    env, env_zi = lfilter(lp_b, lp_a, rect, zi=env_zi)
+    return env, filt, bp_zi, notch_state, env_zi

@@ -40,9 +40,9 @@ from config import (
     DANCE_BILATERAL_CONTRACTIONS, DANCE_FRONTALIS_CONTRACTIONS,
     BUZZER_BILATERAL_CONTRACTIONS,
     DAQ_AO_CHANNEL, DAQ_AI_CHANNEL, DAQ_V_MIN, DAQ_V_MAX,
-    bp_a, notch_a, lp_a, ROBOT_IP,
+    bp_a, lp_a, ROBOT_IP,
 )
-from emg_core         import MuscleCalib, generate_signals, process_chunk
+from emg_core         import Adaptive50HzCanceller, MuscleCalib, generate_signals, process_chunk
 from robot_controller import RobotDog, emg_to_robot
 
 
@@ -188,7 +188,7 @@ class EMGRobotWindow(QWidget):
         self.env_bufs  = [np.zeros(n) for _ in range(3)]
         self.norm_bufs = [np.zeros(n) for _ in range(3)]
         self.bp_zis    = [np.zeros(len(bp_a) - 1) for _ in range(3)]
-        self.notch_zis = [np.zeros(len(notch_a) - 1) for _ in range(3)]
+        self.notch_states = [Adaptive50HzCanceller() for _ in range(3)]
         self.env_zis   = [np.zeros(len(lp_a) - 1) for _ in range(3)]
 
         # ── Special-command state ───────────────────────────
@@ -732,8 +732,8 @@ class EMGRobotWindow(QWidget):
         norm_vals = []
 
         for i in range(3):
-            env, filt, self.bp_zis[i], self.notch_zis[i], self.env_zis[i] = process_chunk(
-                raws[i], self.bp_zis[i], self.notch_zis[i], self.env_zis[i]
+            env, filt, self.bp_zis[i], self.notch_states[i], self.env_zis[i] = process_chunk(
+                raws[i], self.bp_zis[i], self.notch_states[i], self.env_zis[i]
             )
             self.calibs[i].feed(env)
             norm = self.calibs[i].normalize(env)
